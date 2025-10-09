@@ -1,0 +1,45 @@
+name: GitHub Action
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    strategy:
+      matrix:
+        runtime: [linux-x64, win-x64]
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 99999
+
+    - name: Check Git
+      shell: bash
+      run: |
+        COMMIT_VERSION=$(git rev-list --count HEAD)
+        echo $COMMIT_VERSION
+        echo "GITCOMMIT=$COMMIT_VERSION" >> $GITHUB_ENV
+
+    - name: Build
+      shell: bash
+      env:
+        GITCOMMIT: ${{env.GITCOMMIT}}
+      run: |
+        mkdir ./build
+        mkdir ./build/gamedata
+        mkdir ./build/modules
+        dotnet publish src/StripperSharp.csproj -f net9.0 -r ${{ matrix.runtime }} --no-self-contained -c Release --output ./build/modules/StripperSharp -p:VersionSuffix=${{env.GITCOMMIT}}
+        cp -r ./gamedata/* ./build/gamedata
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      env:
+        GITCOMMIT: ${{env.GITCOMMIT}}
+      with:
+        name: StripperSharp-git${{env.GITCOMMIT}}-${{ matrix.runtime }}
+        path: ./build
+        if-no-files-found: error

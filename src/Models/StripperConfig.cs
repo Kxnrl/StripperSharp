@@ -27,9 +27,9 @@ namespace Kxnrl.StripperSharp.Models;
 
 internal class StripperConfig
 {
-    public StripperFile?                                        Global        { get; set; }
-    public StripperFile?                                        GlobalDefault { get; set; }
-    public Dictionary<string /* (World::Lump) */, StripperFile> Lumps         { get; set; }
+    public StripperFile?                                        Global        { get; private set; }
+    public StripperFile?                                        GlobalDefault { get; private set; }
+    public Dictionary<string /* (World::Lump) */, StripperFile> Lumps         { get; init; }
 
     public bool HasData => Global is not null || GlobalDefault is not null || Lumps.Count > 0;
 

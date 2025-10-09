@@ -17,62 +17,64 @@
  * along with ModSharp. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using System;
 using System.Text.Json.Serialization;
 
 namespace Kxnrl.StripperSharp.Models;
 
+// ReSharper disable MemberCanBePrivate.Global
 internal class StripperConnection
 {
     [JsonPropertyName("output")]
-    public string? Output { get; private set; }
+    public string? Output { get; init; }
 
     [JsonPropertyName("target")]
-    public string? Target { get; private set; }
+    public string? Target { get; init; }
 
     [JsonPropertyName("input")]
-    public string? Input { get; private set; }
+    public string? Input { get; init; }
 
     [JsonPropertyName("param")]
-    public string? Param { get; private set; }
+    public string? Param { get; init; }
 
     [JsonPropertyName("delay")]
     public float? Delay { get; init; }
 
     [JsonPropertyName("limit")]
-    public int? Limit { get; private set; }
+    public int? Limit { get; init; }
 
+    [Obsolete("Use Output instead", true)]
     [JsonPropertyName("outputname")]
-    private string? OutputName
+    public string? OutputName
     {
-        get => Output;
-        set => Output = value;
+        init => Output = value;
     }
 
+    [Obsolete("Use Input instead", true)]
     [JsonPropertyName("inputname")]
-    private string? InputName
+    public string? InputName
     {
-        get => Input;
-        set => Input = value;
+        init => Input = value;
     }
 
+    [Obsolete("Use Target instead", true)]
     [JsonPropertyName("targetname")]
-    private string? TargetName
+    public string? TargetName
     {
-        get => Target;
-        set => Target = value;
+        init => Target = value;
     }
 
+    [Obsolete("Use Param instead", true)]
     [JsonPropertyName("overrideparam")]
-    private string? OverrideParam
+    public string? OverrideParam
     {
-        get => Param;
-        set => Param = value;
+        init => Param = value;
     }
 
+    [Obsolete("Use Limit instead", true)]
     [JsonPropertyName("timestofire")]
-    private int? TimesToFire
+    public int? TimesToFire
     {
-        get => Limit;
-        set => Limit = value;
+        init => Limit = value;
     }
 }

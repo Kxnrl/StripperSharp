@@ -17,12 +17,14 @@
  * along with ModSharp. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Kxnrl.StripperSharp.Models;
 
+// ReSharper disable MemberCanBePrivate.Global
 internal class StripperFile
 {
     [JsonPropertyName("add")]
@@ -32,13 +34,12 @@ internal class StripperFile
     public List<Dictionary<string, JsonDocument>>? Modify { get; init; }
 
     [JsonPropertyName("remove")]
-    public List<Dictionary<string, JsonDocument>>? Remove { get; private set; }
+    public List<Dictionary<string, JsonDocument>>? Remove { get; init; }
 
-    // Hack of multi binding
+    [Obsolete("Use Remove instead", true)]
     [JsonPropertyName("filter")]
-    private List<Dictionary<string, JsonDocument>>? Filter
+    public List<Dictionary<string, JsonDocument>>? Filter
     {
-        get => Remove;
-        set => Remove = value;
+        init => Remove = value;
     }
 }

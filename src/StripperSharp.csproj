@@ -7,7 +7,7 @@
         <Nullable>enable</Nullable>
         <AssemblyName>StripperSharp</AssemblyName>
         <RootNamespace>Kxnrl.StripperSharp</RootNamespace>
-        <VersionPrefix>1</VersionPrefix>
+        <VersionPrefix>1.0</VersionPrefix>
         <VersionSuffix>0</VersionSuffix>
         <Version>$(VersionPrefix).$(VersionSuffix)</Version>
         <Copyright>©2025 Kxnrl</Copyright>

@@ -8,6 +8,6 @@ A C# port of [Striper:Source](https://github.com/alliedmodders/stripper-source) 
 
 ## Note
 
-- For user friendly and preventing misoperation, we don't support ``replace`` in ``modify`` section.  
+- For user friendly and preventing misoperation, ``replace`` is disabled by default, cvar ``ms_stripper_replace_enabled``.  
 - Support both ``remove`` and ``filter``.
 - Remove TargetType and make it default to ``EntityNameOrClassName``.

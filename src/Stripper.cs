@@ -21,14 +21,17 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using Kxnrl.StripperSharp.Models;
 using Kxnrl.StripperSharp.Natives;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared;
+using Sharp.Shared.Enums;
 using Sharp.Shared.Hooks;
 using Sharp.Shared.Listeners;
+using Sharp.Shared.Objects;
 
 namespace Kxnrl.StripperSharp;
 
@@ -39,7 +42,10 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
 
     public static readonly JsonSerializerOptions SerializerOptions = SerializerOptions = new JsonSerializerOptions
     {
-        AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip, PropertyNamingPolicy = null,
+        AllowTrailingCommas  = true,
+        ReadCommentHandling  = JsonCommentHandling.Skip,
+        PropertyNamingPolicy = null,
+        WriteIndented        = true,
     };
 
     private static Stripper?                                         _sInstance;
@@ -49,6 +55,9 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
     private readonly IModSharp         _modSharp;
     private readonly IDetourHook       _detour;
     private readonly StripperConfig    _config;
+
+    private readonly IConVar _cvarEnableVerbose;
+    private readonly IConVar _cvarEnableReplace;
 
     public Stripper(ISharedSystem sharedSystem,
         string?                   dllPath,
@@ -65,6 +74,20 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
         _modSharp = sharedSystem.GetModSharp();
         _detour   = sharedSystem.GetHookManager().CreateDetourHook();
         _config   = new StripperConfig(Path.Combine(sharpPath, "stripper"));
+
+        _cvarEnableVerbose = sharedSystem.GetConVarManager()
+                                         .CreateConVar("ms_stripper_verbose_enabled",
+                                                       false,
+                                                       "Enable verbose logging of stripper",
+                                                       ConVarFlags.Release)
+                             ?? throw new EntryPointNotFoundException("Failed to create conVar 'ms_stripper_verbose_enabled'");
+
+        _cvarEnableReplace = sharedSystem.GetConVarManager()
+                                         .CreateConVar("ms_stripper_replace_enabled",
+                                                       true,
+                                                       "Enable 'replace' block in 'modify' section.",
+                                                       ConVarFlags.Release)
+                             ?? throw new EntryPointNotFoundException("Failed to create conVar 'ms_stripper_replace_enabled'");
 
         _sInstance = this;
     }
@@ -170,7 +193,7 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
         }
     }
 
-    private static void ApplyOverrides(StripperFile config, CEntityLump* lump)
+    private void ApplyOverrides(StripperFile config, CEntityLump* lump)
     {
         if (config.Remove is { Count: > 0 } removes)
         {
@@ -183,6 +206,11 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
                     if (Matcher.DoesEntityMatch(kv, remove))
                     {
                         lump->EntityKeyValues.Remove(j--);
+
+                        if (_cvarEnableVerbose.GetBool())
+                        {
+                            _logger.LogInformation("Removed\n{e}", JsonSerializer.Serialize(remove, SerializerOptions));
+                        }
                     }
                 }
             }
@@ -198,6 +226,11 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
 
                 kv->RefCount++;
                 lump->EntityKeyValues.Add(kv);
+
+                if (_cvarEnableVerbose.GetBool())
+                {
+                    _logger.LogInformation("Added\n{e}", JsonSerializer.Serialize(add, SerializerOptions));
+                }
             }
         }
 
@@ -219,16 +252,37 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
 
                     if (Matcher.DoesEntityMatch(kv, matches))
                     {
+                        var builder = new StringBuilder();
+
                         if (modify.GetValueOrDefault("delete")
                                   ?.Deserialize<Dictionary<string, JsonDocument>>(SerializerOptions) is { } deletions)
                         {
                             Modifier.DeleteKeyValues(kv, deletions);
+
+                            builder.Append($"  Deleted\n    {JsonSerializer.Serialize(deletions, SerializerOptions)}\n");
+                        }
+
+                        if (modify.GetValueOrDefault("replace")
+                                  ?.Deserialize<Dictionary<string, JsonDocument>>(SerializerOptions) is { } replaces)
+                        {
+                            Modifier.InsertKeyValues(kv, replaces, false);
+
+                            builder.Append($"  Replaced\n    {JsonSerializer.Serialize(replaces, SerializerOptions)}\n");
                         }
 
                         if (modify.GetValueOrDefault("insert")
                                   ?.Deserialize<Dictionary<string, JsonDocument>>(SerializerOptions) is { } insertions)
                         {
                             Modifier.InsertKeyValues(kv, insertions);
+
+                            builder.Append($"  Inserted\n    {JsonSerializer.Serialize(insertions, SerializerOptions)}\n");
+                        }
+
+                        if (_cvarEnableVerbose.GetBool())
+                        {
+                            _logger.LogInformation("Modified\n{m}\n{b}",
+                                                   JsonSerializer.Serialize(matches, SerializerOptions),
+                                                   builder.ToString());
                         }
                     }
                 }
@@ -360,22 +414,47 @@ file static unsafe class Matcher
 
 file static unsafe class Modifier
 {
-    internal static void InsertKeyValues(CEntityKeyValues* kv, Dictionary<string, JsonDocument> insertions)
+    internal static void InsertKeyValues(CEntityKeyValues* kv,
+        Dictionary<string, JsonDocument>                   insertions,
+        bool                                               loopableConnection = true)
     {
         foreach (var (key, doc) in insertions)
         {
             if (key.Equals("connections") || key.Equals("io"))
             {
-                var connections = doc.Deserialize<List<StripperConnection>>(Stripper.SerializerOptions)
-                                  ?? throw new JsonException("Failed to Deserialize<List<StripperConnection>>");
-
-                foreach (var connection in connections)
+                if (loopableConnection)
                 {
+                    var connections = doc.Deserialize<List<StripperConnection>>(Stripper.SerializerOptions)
+                                      ?? throw new JsonException("Failed to Deserialize<List<StripperConnection>>");
+
+                    foreach (var connection in connections)
+                    {
+                        if (string.IsNullOrWhiteSpace(connection.Output)
+                            || string.IsNullOrWhiteSpace(connection.Input)
+                            || string.IsNullOrWhiteSpace(connection.Target))
+                        {
+                            throw new InvalidDataException("Missing 'output' or 'input' or 'target'");
+                        }
+
+                        kv->AddConnectionDesc(connection.Output,
+                                              EntityIOTargetType.EntityNameOrClassName,
+                                              connection.Target,
+                                              connection.Input,
+                                              connection.Param ?? "",
+                                              connection.Delay.GetValueOrDefault(),
+                                              connection.Limit.GetValueOrDefault(-1));
+                    }
+                }
+                else
+                {
+                    var connection = doc.Deserialize<StripperConnection>(Stripper.SerializerOptions)
+                                     ?? throw new JsonException("Failed to Deserialize<StripperConnection>");
+
                     if (string.IsNullOrWhiteSpace(connection.Output)
                         || string.IsNullOrWhiteSpace(connection.Input)
                         || string.IsNullOrWhiteSpace(connection.Target))
                     {
-                        throw new InvalidDataException("Missing 'output' or 'input' or 'target' in add section");
+                        throw new InvalidDataException("Missing 'output' or 'input' or 'target'");
                     }
 
                     kv->AddConnectionDesc(connection.Output,

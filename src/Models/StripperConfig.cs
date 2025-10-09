@@ -33,8 +33,8 @@ internal class StripperConfig
 
     public bool HasData => Global is not null || GlobalDefault is not null || Lumps.Count > 0;
 
-    private readonly string                _stripperPath;
-    private readonly UTF8Encoding          _encoding;
+    private readonly string       _stripperPath;
+    private readonly UTF8Encoding _encoding;
 
     public StripperConfig(string path)
     {

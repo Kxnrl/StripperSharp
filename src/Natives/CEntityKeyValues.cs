@@ -52,8 +52,10 @@ internal unsafe struct CEntityKeyValues
     [FieldOffset(40)]
     public CUtlLeanVectorBase<EntityIOConnectionDescFat, int> ConnectionDescs;
 
-    public static void Init(IGameData gameData, IModSharp sharp)
+    public static void Init(IModSharp sharp)
     {
+        var gameData = sharp.GetGameData();
+
         _fnFindKeyValues
             = (delegate* unmanaged<CEntityKeyValues*, CHashKey*, bool*, CKeyValues3*>) gameData.GetAddress(
                 "CEntityKeyValues::FindKeyValues");

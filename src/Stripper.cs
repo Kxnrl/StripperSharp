@@ -85,6 +85,9 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
         _sTrampoline = (delegate *unmanaged<nint, CSingleWorldRep*, nint>) _detour.Trampoline;
 
         _modSharp.InstallGameListener(this);
+
+        CEntityKeyValues.Init(_modSharp);
+        CKeyValues3.Init(_modSharp);
     }
 
     public void Shutdown()

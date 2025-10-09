@@ -31,8 +31,10 @@ namespace Kxnrl.StripperSharp.Natives;
 [StructLayout(LayoutKind.Explicit, Size = 16)]
 internal unsafe struct CKeyValues3
 {
-    public static void Init(IGameData gameData)
+    public static void Init(IModSharp sharp)
     {
+        var gameData = sharp.GetGameData();
+
         _fnGetString = (delegate* unmanaged<CKeyValues3*, byte*, sbyte*>) gameData.GetAddress("KeyValues3::GetString");
 
         _fnConstructor

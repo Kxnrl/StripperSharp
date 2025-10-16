@@ -54,7 +54,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="ModSharp.Sharp.Shared" Version="2.0.15" PrivateAssets="all" />
+      <PackageReference Include="ModSharp.Sharp.Shared" Version="2.0.22" PrivateAssets="all" />
     </ItemGroup>
 
 </Project>

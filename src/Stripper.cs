@@ -60,14 +60,12 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
     private readonly IConVar _cvarEnableReplace;
 
     public Stripper(ISharedSystem sharedSystem,
-        string?                   dllPath,
-        string?                   sharpPath,
-        Version?                  version,
-        IConfiguration?           coreConfiguration,
+        string                    dllPath,
+        string                    sharpPath,
+        Version                   version,
+        IConfiguration            coreConfiguration,
         bool                      hotReload)
     {
-        ArgumentNullException.ThrowIfNull(sharpPath);
-
         _logger = sharedSystem.GetLoggerFactory()
                               .CreateLogger<Stripper>();
 

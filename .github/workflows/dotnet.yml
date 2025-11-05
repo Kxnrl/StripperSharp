@@ -11,6 +11,8 @@ jobs:
     strategy:
       matrix:
         runtime: [linux-x64, win-x64]
+    outputs:
+      gitcommit: ${{ steps.git_version.outputs.gitcommit }}
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -18,11 +20,13 @@ jobs:
         fetch-depth: 99999
 
     - name: Check Git
+      id: git_version
       shell: bash
       run: |
         COMMIT_VERSION=$(git rev-list --count HEAD)
         echo $COMMIT_VERSION
         echo "GITCOMMIT=$COMMIT_VERSION" >> $GITHUB_ENV
+        echo "gitcommit=$COMMIT_VERSION" >> $GITHUB_OUTPUT
 
     - name: Build
       shell: bash
@@ -43,3 +47,36 @@ jobs:
         name: StripperSharp-git${{env.GITCOMMIT}}-${{ matrix.runtime }}
         path: ./build
         if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: StripperSharp-git*
+
+    - name: Create zip archives
+      shell: bash
+      run: |
+        for dir in StripperSharp-git*/; do
+          zipname="${dir%/}"
+          zipname="${zipname//-x64/}"
+          zip -r "${zipname}.zip" "$dir"
+        done
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+      with:
+        tag_name: v${{ needs.build.outputs.gitcommit }}
+        name: StripperSharp-git${{ needs.build.outputs.gitcommit }}
+        prerelease: false
+        overwrite_files: true
+        generate_release_notes: true
+        files: |
+          *.zip

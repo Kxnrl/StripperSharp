@@ -20,3 +20,8 @@ A C# port of [Striper:Source](https://github.com/alliedmodders/stripper-source) 
 
 - ``ms_stripper_replace_enabled``: Enabled ``replace`` block in ``modify`` section, default: ``false``.  
 - ``ms_stripper_verbose_enabled``: Enabled verbose logging, default: ``false``.  
+
+## Installation
+
+- Download file from latest [Release](https://github.com/Kxnrl/StripperSharp/releases/latest)
+- Extract files and copy `StripperSharp` folder to `game/sharp/modules`

@@ -70,7 +70,9 @@ jobs:
         for dir in StripperSharp-git*/; do
           zipname="${dir%/}"
           zipname="${zipname//-x64/}"
-          zip -r "${zipname}.zip" "$dir"
+          pushd "$dir"
+          zip -r "../${zipname}.zip" .
+          popd
         done
 
     - name: Create Release

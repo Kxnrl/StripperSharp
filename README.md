@@ -24,4 +24,4 @@ A C# port of [Striper:Source](https://github.com/alliedmodders/stripper-source) 
 ## Installation
 
 - Download file from latest [Release](https://github.com/Kxnrl/StripperSharp/releases/latest)
-- Extract files and copy `StripperSharp` folder to `game/sharp/modules`
+- Extract files to `game/sharp` and merge into `gamedata` and `module` folder.

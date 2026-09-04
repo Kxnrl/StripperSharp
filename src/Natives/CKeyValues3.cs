@@ -146,7 +146,7 @@ internal unsafe struct CKeyValues3
             case KeyValues3Type.Array:
                 return "<KV3_TYPE_ARRAY>";
             case KeyValues3Type.Table:
-                return "KV3_TYPE_TABLE";
+                return "<KV3_TYPE_TABLE>";
             default:
                 return "<KV3_TYPE_INVALID>";
         }

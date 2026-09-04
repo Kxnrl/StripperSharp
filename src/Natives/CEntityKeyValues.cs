@@ -284,8 +284,16 @@ internal unsafe struct CEntityKeyValues
             fixed (CEntityKeyValues* pThis = &this)
             {
                 var kv3 = CKeyValues3.Create(KeyValues3Type.Null, KeyValues3SubType.UnSpecified);
-                _fnAddConnectionDesc(pThis, pOutput, targetType, pTarget, pInput, pParam, limit, delay, kv3);
-                kv3->DeleteThis();
+
+                try
+                {
+                    _fnAddConnectionDesc(pThis, pOutput, targetType, pTarget, pInput, pParam, limit, delay, kv3);
+                }
+                finally
+                {
+                    kv3->DeleteThis();
+                    MemoryAllocator.Free(kv3);
+                }
             }
         }
         finally
@@ -334,13 +342,15 @@ internal unsafe struct CEntityKeyValues
         }
     }
 
-    public void RemoveConnectionDesc(int index)
+    public bool TryRemoveConnectionDesc(int index)
     {
         if (QueuedForSpawnCount > 0)
         {
-            return;
+            return false;
         }
 
         ConnectionDescs.Remove(index);
+
+        return true;
     }
 }

@@ -18,7 +18,6 @@
  */
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -40,12 +39,11 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
     public string DisplayName   => "StripperSharp";
     public string DisplayAuthor => "Kxnrl";
 
-    public static readonly JsonSerializerOptions SerializerOptions = SerializerOptions = new JsonSerializerOptions
+    public static readonly JsonSerializerOptions SerializerOptions = new JsonSerializerOptions
     {
         AllowTrailingCommas  = true,
         ReadCommentHandling  = JsonCommentHandling.Skip,
         PropertyNamingPolicy = null,
-        WriteIndented        = true,
     };
 
     private static Stripper?                                         _sInstance;
@@ -82,7 +80,7 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
 
         _cvarEnableReplace = sharedSystem.GetConVarManager()
                                          .CreateConVar("ms_stripper_replace_enabled",
-                                                       true,
+                                                       false,
                                                        "Enable 'replace' block in 'modify' section.",
                                                        ConVarFlags.Release)
                              ?? throw new EntryPointNotFoundException("Failed to create conVar 'ms_stripper_replace_enabled'");
@@ -98,13 +96,19 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
         _detour.Prepare("IWorldRendererMgr::CreateWorldInternal",
                         (nint) (delegate* unmanaged<nint, CSingleWorldRep*, nint>) &CreateWorldInternal);
 
-        return _detour.Install();
+        // Trampoline 仅在 Install 成功后有效
+        if (!_detour.Install())
+        {
+            return false;
+        }
+
+        _sTrampoline = (delegate* unmanaged<nint, CSingleWorldRep*, nint>) _detour.Trampoline;
+
+        return true;
     }
 
     public void PostInit()
     {
-        _sTrampoline = (delegate *unmanaged<nint, CSingleWorldRep*, nint>) _detour.Trampoline;
-
         _modSharp.InstallGameListener(this);
 
         CEntityKeyValues.Init(_modSharp);
@@ -133,6 +137,13 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
         {
             _config.Load(_modSharp.GetGlobals().MapName);
         }
+        catch (AggregateException e)
+        {
+            foreach (var inner in e.InnerExceptions)
+            {
+                _logger.LogError(inner, "Failed to load stripper configuration");
+            }
+        }
         catch (Exception e)
         {
             _logger.LogError(e, "Failed to load stripper configuration");
@@ -154,9 +165,19 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
 
     private void ApplyOverrides(CSingleWorldRep* pSingleWorld)
     {
+        var world = pSingleWorld->pWorld;
+
+        if (world is null)
+        {
+            return;
+        }
+
+        var verbose        = _cvarEnableVerbose.GetBool();
+        var replaceEnabled = _cvarEnableReplace.GetBool();
+
         try
         {
-            ref var lumpHandles = ref pSingleWorld->pWorld->EntityLumps;
+            ref var lumpHandles = ref world->EntityLumps;
 
             var mapName   = _modSharp.GetGlobals().MapName;
             var worldName = pSingleWorld->Name.Get();
@@ -169,19 +190,19 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
 
                 if (_config.Lumps.TryGetValue($"{worldName}::{lumpName}", out var lumpOverrides))
                 {
-                    ApplyOverrides(lumpOverrides, lumpData);
+                    ApplyOverrides(lumpOverrides, lumpData, verbose, replaceEnabled);
                 }
 
-                if (_config.Global is not null)
+                if (_config.Global is { } global)
                 {
-                    ApplyOverrides(_config.Global, lumpData);
+                    ApplyOverrides(global, lumpData, verbose, replaceEnabled);
                 }
 
-                if (_config.GlobalDefault is not null
+                if (_config.GlobalDefault is { } globalDefault
                     && mapName.Equals(worldName, StringComparison.OrdinalIgnoreCase)
                     && lumpName.Equals("default_ents", StringComparison.OrdinalIgnoreCase))
                 {
-                    ApplyOverrides(_config.GlobalDefault, lumpData);
+                    ApplyOverrides(globalDefault, lumpData, verbose, replaceEnabled);
                 }
             }
         }
@@ -191,148 +212,113 @@ internal sealed unsafe class Stripper : IModSharpModule, IGameListener
         }
     }
 
-    private void ApplyOverrides(StripperFile config, CEntityLump* lump)
+    private void ApplyOverrides(StripperRules rules, CEntityLump* lump, bool verbose, bool replaceEnabled)
     {
-        if (config.Remove is { Count: > 0 } removes)
+        foreach (var remove in rules.Remove)
         {
-            foreach (var remove in removes)
+            for (var j = 0; j < lump->EntityKeyValues.Size; j++)
             {
-                for (var j = 0; j < lump->EntityKeyValues.Size; j++)
+                if (!Matcher.DoesEntityMatch(lump->EntityKeyValues.Element(j).Value, remove))
                 {
-                    var kv = lump->EntityKeyValues.Element(j).Value;
+                    continue;
+                }
 
-                    if (Matcher.DoesEntityMatch(kv, remove))
-                    {
-                        lump->EntityKeyValues.Remove(j--);
+                lump->EntityKeyValues.Remove(j--);
 
-                        if (_cvarEnableVerbose.GetBool())
-                        {
-                            _logger.LogInformation("Removed\n{e}", JsonSerializer.Serialize(remove, SerializerOptions));
-                        }
-                    }
+                if (verbose)
+                {
+                    _logger.LogInformation("Removed\n{e}", remove.RawText);
                 }
             }
         }
 
-        if (config.Add is { Count: > 0 } adds)
+        foreach (var add in rules.Add)
         {
-            foreach (var add in adds)
+            var kv = CEntityKeyValues.Create(lump->pAllocatorContext, CEntityKeyValues.AllocatorType.External);
+
+            Modifier.Insert(kv, add, _logger);
+
+            kv->RefCount++;
+            lump->EntityKeyValues.Add(kv);
+
+            if (verbose)
             {
-                var kv = CEntityKeyValues.Create(lump->pAllocatorContext, CEntityKeyValues.AllocatorType.External);
-
-                Modifier.InsertKeyValues(kv, add);
-
-                kv->RefCount++;
-                lump->EntityKeyValues.Add(kv);
-
-                if (_cvarEnableVerbose.GetBool())
-                {
-                    _logger.LogInformation("Added\n{e}", JsonSerializer.Serialize(add, SerializerOptions));
-                }
+                _logger.LogInformation("Added\n{e}", add.RawText);
             }
         }
 
-        if (config.Modify is { Count: > 0 } modifies)
+        foreach (var modify in rules.Modify)
         {
-            foreach (var modify in modifies)
+            var replace = replaceEnabled ? modify.Replace : null;
+            var detail  = verbose ? Describe(modify, replace) : null;
+
+            for (var j = 0; j < lump->EntityKeyValues.Size; j++)
             {
-                if (!modify.TryGetValue("match", out var matchDoc))
+                var kv = lump->EntityKeyValues.Element(j).Value;
+
+                if (!Matcher.DoesEntityMatch(kv, modify.Match))
                 {
-                    throw new JsonException("Missing 'match' block in 'modify' section");
+                    continue;
                 }
 
-                var matches = matchDoc.Deserialize<Dictionary<string, JsonDocument>>(SerializerOptions)
-                              ?? throw new JsonException("Failed to Deserialize<Dictionary<string, JsonDocument>>");
-
-                for (var j = 0; j < lump->EntityKeyValues.Size; j++)
+                // replace 写的键可能正是 delete 要删的, 三步顺序不能调
+                if (replace is not null)
                 {
-                    var kv = lump->EntityKeyValues.Element(j).Value;
+                    Modifier.Replace(kv, replace, _logger);
+                }
 
-                    if (Matcher.DoesEntityMatch(kv, matches))
-                    {
-                        var builder = new StringBuilder();
+                if (modify.Delete is { } delete)
+                {
+                    Modifier.Delete(kv, delete);
+                }
 
-                        if (modify.GetValueOrDefault("delete")
-                                  ?.Deserialize<Dictionary<string, JsonDocument>>(SerializerOptions) is { } deletions)
-                        {
-                            Modifier.DeleteKeyValues(kv, deletions);
+                if (modify.Insert is { } insert)
+                {
+                    Modifier.Insert(kv, insert, _logger);
+                }
 
-                            builder.Append($"  Deleted\n    {JsonSerializer.Serialize(deletions, SerializerOptions)}\n");
-                        }
-
-                        if (modify.GetValueOrDefault("replace")
-                                  ?.Deserialize<Dictionary<string, JsonDocument>>(SerializerOptions) is { } replaces)
-                        {
-                            Modifier.InsertKeyValues(kv, replaces, false);
-
-                            builder.Append($"  Replaced\n    {JsonSerializer.Serialize(replaces, SerializerOptions)}\n");
-                        }
-
-                        if (modify.GetValueOrDefault("insert")
-                                  ?.Deserialize<Dictionary<string, JsonDocument>>(SerializerOptions) is { } insertions)
-                        {
-                            Modifier.InsertKeyValues(kv, insertions);
-
-                            builder.Append($"  Inserted\n    {JsonSerializer.Serialize(insertions, SerializerOptions)}\n");
-                        }
-
-                        if (_cvarEnableVerbose.GetBool())
-                        {
-                            _logger.LogInformation("Modified\n{m}\n{b}",
-                                                   JsonSerializer.Serialize(matches, SerializerOptions),
-                                                   builder.ToString());
-                        }
-                    }
+                if (detail is not null)
+                {
+                    _logger.LogInformation("Modified\n{m}\n{b}", modify.Match.RawText, detail);
                 }
             }
         }
+    }
+
+    private static string Describe(StripperModify modify, StripperReplace? replace)
+    {
+        var builder = new StringBuilder();
+
+        if (replace is not null)
+        {
+            builder.Append("  Replaced\n    ").Append(replace.RawText).Append('\n');
+        }
+
+        if (modify.Delete is { } delete)
+        {
+            builder.Append("  Deleted\n    ").Append(delete.RawText).Append('\n');
+        }
+
+        if (modify.Insert is { } insert)
+        {
+            builder.Append("  Inserted\n    ").Append(insert.RawText).Append('\n');
+        }
+
+        return builder.ToString();
     }
 }
 
 file static unsafe class Matcher
 {
-    internal static bool DoesEntityMatch(CEntityKeyValues* kv, Dictionary<string, JsonDocument> matches)
+    private const float FloatEpsilon = 0.0001f;
+
+    internal static bool DoesEntityMatch(CEntityKeyValues* kv, StripperMatch match)
     {
-        foreach (var (key, doc) in matches)
+        foreach (var (key, expect) in match.Fields)
         {
-            if (key.Equals("connections") || key.Equals("io"))
-            {
-                var connectionCount = kv->ConnectionDescs.Count;
+            var member = kv->FindKeyValuesMember(key);
 
-                if (connectionCount == 0)
-                {
-                    return false;
-                }
-
-                var connections = doc.Deserialize<List<StripperConnection>>(Stripper.SerializerOptions)
-                                  ?? throw new JsonException("Failed to Deserialize<List<StripperConnection>>");
-
-                if (connections.Count == 0)
-                {
-                    continue;
-                }
-
-                for (var i = 0; i < connectionCount; i++)
-                {
-                    ref var desc = ref kv->ConnectionDescs[i];
-
-                    if (!MatchConnection(in desc, connections))
-                    {
-                        return false;
-                    }
-                }
-
-                continue;
-            }
-
-            if (doc.RootElement.GetString() is not { } match)
-            {
-                throw new JsonException($"Invalid value of [{key}]");
-            }
-
-            var pKeyValue = kv->FindKeyValuesMember(key);
-
-            if (pKeyValue == null)
+            if (member == null)
             {
                 return false;
             }
@@ -340,7 +326,15 @@ file static unsafe class Matcher
             var allowWildcard = key.Equals("targetname",   StringComparison.OrdinalIgnoreCase)
                                 || key.Equals("classname", StringComparison.OrdinalIgnoreCase);
 
-            if (!MatchValue(pKeyValue->GetStringAuto(), match, allowWildcard))
+            if (!MatchValue(member->GetStringAuto(), expect, allowWildcard))
+            {
+                return false;
+            }
+        }
+
+        foreach (var rule in match.Connections)
+        {
+            if (!HasMatchingConnection(kv, rule))
             {
                 return false;
             }
@@ -349,46 +343,51 @@ file static unsafe class Matcher
         return true;
     }
 
-    internal static bool MatchConnection(in EntityIOConnectionDescFat desc, List<StripperConnection> connections)
+    private static bool HasMatchingConnection(CEntityKeyValues* kv, ConnectionRule rule)
     {
-        var output = desc.OutputName;
-        var target = desc.TargetName;
-        var input  = desc.InputName;
-        var param  = desc.OverrideParam;
-        var delay  = desc.Delay;
-        var limit  = desc.TimesToFire;
+        var count = kv->ConnectionDescs.Count;
 
-        foreach (var match in connections)
+        for (var i = 0; i < count; i++)
         {
-            if (match.Input is not null && !MatchValue(input, match.Input))
+            if (MatchesRule(in kv->ConnectionDescs[i], rule))
             {
-                return false;
+                return true;
             }
+        }
 
-            if (match.Output is not null && !MatchValue(output, match.Output, true))
-            {
-                return false;
-            }
+        return false;
+    }
 
-            if (match.Target is not null && !MatchValue(target, match.Target))
-            {
-                return false;
-            }
+    internal static bool MatchesRule(in EntityIOConnectionDescFat desc, ConnectionRule rule)
+    {
+        if (rule.Input is { } input && !MatchValue(desc.InputName, input))
+        {
+            return false;
+        }
 
-            if (match.Param is not null && !MatchValue(param, match.Param, true))
-            {
-                return false;
-            }
+        if (rule.Output is { } output && !MatchValue(desc.OutputName, output, true))
+        {
+            return false;
+        }
 
-            if (match.Delay is { } md && !MatchValue(delay, md))
-            {
-                return false;
-            }
+        if (rule.Target is { } target && !MatchValue(desc.TargetName, target))
+        {
+            return false;
+        }
 
-            if (match.Limit is { } ml && limit != ml)
-            {
-                return false;
-            }
+        if (rule.Param is { } param && !MatchValue(desc.OverrideParam, param, true))
+        {
+            return false;
+        }
+
+        if (rule.Delay is { } delay && MathF.Abs(desc.Delay - delay) >= FloatEpsilon)
+        {
+            return false;
+        }
+
+        if (rule.Limit is { } limit && desc.TimesToFire != limit)
+        {
+            return false;
         }
 
         return true;
@@ -396,137 +395,97 @@ file static unsafe class Matcher
 
     internal static bool MatchValue(string value, string match, bool allowWildcard = false)
     {
-        if (allowWildcard && match.EndsWith("*"))
+        if (allowWildcard && match.EndsWith('*'))
         {
-            var wildcard = match[..^1];
-
-            return value.StartsWith(wildcard, StringComparison.OrdinalIgnoreCase);
+            return value.StartsWith(match[..^1], StringComparison.OrdinalIgnoreCase);
         }
 
         return value.Equals(match, StringComparison.OrdinalIgnoreCase);
     }
-
-    private static bool MatchValue(float value, float match, float epsilon = 0.001f)
-        => MathF.Abs(value - match) <= epsilon;
 }
 
 file static unsafe class Modifier
 {
-    internal static void InsertKeyValues(CEntityKeyValues* kv,
-        Dictionary<string, JsonDocument>                   insertions,
-        bool                                               loopableConnection = true)
+    internal static void Insert(CEntityKeyValues* kv, StripperInsert insert, ILogger logger)
     {
-        foreach (var (key, doc) in insertions)
+        foreach (var (key, value) in insert.Fields)
         {
-            if (key.Equals("connections") || key.Equals("io"))
+            kv->AddOrSetKeyValueMemberString(key, value);
+        }
+
+        foreach (var connection in insert.Connections)
+        {
+            if (!connection.IsInsertable)
             {
-                if (loopableConnection)
-                {
-                    var connections = doc.Deserialize<List<StripperConnection>>(Stripper.SerializerOptions)
-                                      ?? throw new JsonException("Failed to Deserialize<List<StripperConnection>>");
+                logger.LogWarning("Invalid IO connection, missing 'output', 'input' or 'target': {o}>{t}>{i}",
+                                  connection.Output,
+                                  connection.Target,
+                                  connection.Input);
 
-                    foreach (var connection in connections)
-                    {
-                        if (string.IsNullOrWhiteSpace(connection.Output)
-                            || string.IsNullOrWhiteSpace(connection.Input)
-                            || string.IsNullOrWhiteSpace(connection.Target))
-                        {
-                            throw new InvalidDataException("Missing 'output' or 'input' or 'target'");
-                        }
-
-                        kv->AddConnectionDesc(connection.Output,
-                                              EntityIOTargetType.EntityNameOrClassName,
-                                              connection.Target,
-                                              connection.Input,
-                                              connection.Param ?? "",
-                                              connection.Delay.GetValueOrDefault(),
-                                              connection.Limit.GetValueOrDefault(-1));
-                    }
-                }
-                else
-                {
-                    var connection = doc.Deserialize<StripperConnection>(Stripper.SerializerOptions)
-                                     ?? throw new JsonException("Failed to Deserialize<StripperConnection>");
-
-                    if (string.IsNullOrWhiteSpace(connection.Output)
-                        || string.IsNullOrWhiteSpace(connection.Input)
-                        || string.IsNullOrWhiteSpace(connection.Target))
-                    {
-                        throw new InvalidDataException("Missing 'output' or 'input' or 'target'");
-                    }
-
-                    kv->AddConnectionDesc(connection.Output,
-                                          EntityIOTargetType.EntityNameOrClassName,
-                                          connection.Target,
-                                          connection.Input,
-                                          connection.Param ?? "",
-                                          connection.Delay.GetValueOrDefault(),
-                                          connection.Limit.GetValueOrDefault(-1));
-                }
+                continue;
             }
-            else
+
+            kv->AddConnectionDesc(connection.Output!,
+                                  EntityIOTargetType.EntityNameOrClassName,
+                                  connection.Target!,
+                                  connection.Input!,
+                                  connection.Param ?? string.Empty,
+                                  connection.Delay ?? 0f,
+                                  connection.Limit ?? -1);
+        }
+    }
+
+    internal static void Delete(CEntityKeyValues* kv, StripperMatch delete)
+    {
+        foreach (var (key, expect) in delete.Fields)
+        {
+            var member = kv->FindKeyValuesMember(key);
+
+            if (member == null)
             {
-                if (doc.RootElement.GetString() is not { } value)
+                continue;
+            }
+
+            if (Matcher.MatchValue(member->GetStringAuto(), expect, true))
+            {
+                kv->RemoveKeyValues(key);
+            }
+        }
+
+        foreach (var rule in delete.Connections)
+        {
+            for (var i = 0; i < kv->ConnectionDescs.Count; i++)
+            {
+                if (!Matcher.MatchesRule(in kv->ConnectionDescs[i], rule))
                 {
-                    throw new JsonException($"Invalid value of [{key}]");
+                    continue;
                 }
 
-                kv->AddOrSetKeyValueMemberString(key, value);
+                // QueuedForSpawnCount > 0 时后续也删不动, 直接放弃避免空转
+                if (!kv->TryRemoveConnectionDesc(i))
+                {
+                    return;
+                }
+
+                i--;
             }
         }
     }
 
-    internal static void DeleteKeyValues(CEntityKeyValues* kv, Dictionary<string, JsonDocument> deletions)
+    internal static void Replace(CEntityKeyValues* kv, StripperReplace replace, ILogger logger)
     {
-        foreach (var (key, doc) in deletions)
+        foreach (var (key, value) in replace.Fields)
         {
-            if (key.Equals("connections") || key.Equals("io"))
+            var member = kv->FindKeyValuesMember(key);
+
+            if (member == null)
             {
-                var connectionCount = kv->ConnectionDescs.Count;
+                logger.LogWarning("Skipped replace of '{key}': the entity has no such key", key);
 
-                if (connectionCount == 0)
-                {
-                    continue;
-                }
-
-                var connections = doc.Deserialize<List<StripperConnection>>(Stripper.SerializerOptions)
-                                  ?? throw new JsonException("Failed to Deserialize<List<StripperConnection>>");
-
-                if (connections.Count == 0)
-                {
-                    continue;
-                }
-
-                for (var i = 0; i < connectionCount; i++)
-                {
-                    ref var desc = ref kv->ConnectionDescs[i];
-
-                    if (Matcher.MatchConnection(in desc, connections))
-                    {
-                        connectionCount--;
-                        kv->RemoveConnectionDesc(i--);
-                    }
-                }
+                continue;
             }
-            else
-            {
-                if (doc.RootElement.GetString() is not { } match)
-                {
-                    throw new JsonException($"Invalid value of [{key}]");
-                }
 
-                var pKeyValue = kv->FindKeyValuesMember(key);
-
-                if (pKeyValue == null)
-                {
-                    continue;
-                }
-
-                if (Matcher.MatchValue(pKeyValue->GetStringAuto(), match, true))
-                {
-                    kv->RemoveKeyValues(key);
-                }
-            }
+            kv->SetKeyValuesMemberString(member, value);
         }
     }
 }

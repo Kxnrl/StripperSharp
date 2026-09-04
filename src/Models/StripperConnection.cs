@@ -17,7 +17,6 @@
  * along with ModSharp. If not, see <https://www.gnu.org/licenses/>.
  */
 
-using System;
 using System.Text.Json.Serialization;
 
 namespace Kxnrl.StripperSharp.Models;
@@ -43,38 +42,18 @@ internal class StripperConnection
     [JsonPropertyName("limit")]
     public int? Limit { get; init; }
 
-    [Obsolete("Use Output instead", true)]
     [JsonPropertyName("outputname")]
-    public string? OutputName
-    {
-        init => Output = value;
-    }
+    public string? OutputName { get; init; }
 
-    [Obsolete("Use Input instead", true)]
-    [JsonPropertyName("inputname")]
-    public string? InputName
-    {
-        init => Input = value;
-    }
-
-    [Obsolete("Use Target instead", true)]
     [JsonPropertyName("targetname")]
-    public string? TargetName
-    {
-        init => Target = value;
-    }
+    public string? TargetName { get; init; }
 
-    [Obsolete("Use Param instead", true)]
+    [JsonPropertyName("inputname")]
+    public string? InputName { get; init; }
+
     [JsonPropertyName("overrideparam")]
-    public string? OverrideParam
-    {
-        init => Param = value;
-    }
+    public string? OverrideParam { get; init; }
 
-    [Obsolete("Use Limit instead", true)]
     [JsonPropertyName("timestofire")]
-    public int? TimesToFire
-    {
-        init => Limit = value;
-    }
+    public int? TimesToFire { get; init; }
 }

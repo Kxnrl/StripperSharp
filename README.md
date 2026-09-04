@@ -15,6 +15,22 @@ A C# port of [Striper:Source](https://github.com/alliedmodders/stripper-source) 
 - Remove TargetType and make it default to ``EntityNameOrClassName``.
 - ``global.jsonc`` for every entity lump, ``global_default.jsonc`` only for default_ents lump.  
 - Unlike StriperCS2, single object style is not support currently, PR is welcome.
+- If any configuration file fails to parse, the **whole** configuration is discarded and every error is logged.
+  Two files resolving to the same ``world::lump`` key (e.g. ``maps/X/foo.jsonc`` and ``maps/X/X/foo.jsonc``)
+  count as such an error.
+- In ``match``, every entry of ``connections`` is an independent requirement: the entity must own **at least
+  one** connection matching it. Listing two entries means "has a connection matching A **and** a connection
+  matching B", not "one connection matching both".
+- In ``delete``, every entry of ``connections`` is applied on its own and removes **every** connection it
+  matches.
+- Wildcard (trailing ``*``) matching is case-insensitive. It is only honoured for ``targetname``/``classname``
+  in ``match``, for ``output``/``param`` in a connection entry, and for any key in ``delete``.
+- ``replace`` only handles key/value pairs. A ``connections`` (or ``io``) key inside ``replace`` is a
+  configuration error; express IO rewrites with ``delete`` + ``insert`` instead.
+- ``replace`` only rewrites keys the entity **already has**. A key that is not present is skipped with a warning
+  and is never created; use ``insert`` for that (``insert`` is add-or-set).
+- An ``add``/``insert`` connection missing ``output``, ``input`` or ``target`` is skipped with a warning when the
+  map loads; an entry with all three missing is rejected when the configuration is read.
 
 ## ConVars
 

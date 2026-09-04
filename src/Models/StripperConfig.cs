@@ -27,9 +27,9 @@ namespace Kxnrl.StripperSharp.Models;
 
 internal class StripperConfig
 {
-    public StripperFile?                                        Global        { get; private set; }
-    public StripperFile?                                        GlobalDefault { get; private set; }
-    public Dictionary<string /* (World::Lump) */, StripperFile> Lumps         { get; init; }
+    public StripperRules?                                        Global        { get; private set; }
+    public StripperRules?                                        GlobalDefault { get; private set; }
+    public Dictionary<string /* (World::Lump) */, StripperRules> Lumps         { get; init; }
 
     public bool HasData => Global is not null || GlobalDefault is not null || Lumps.Count > 0;
 
@@ -40,7 +40,7 @@ internal class StripperConfig
     {
         _stripperPath = path;
         _encoding     = new UTF8Encoding(false);
-        Lumps         = new Dictionary<string, StripperFile>(StringComparer.OrdinalIgnoreCase);
+        Lumps         = new Dictionary<string, StripperRules>(StringComparer.OrdinalIgnoreCase);
     }
 
     public void Purge()
@@ -50,64 +50,84 @@ internal class StripperConfig
         Lumps.Clear();
     }
 
+    /// <exception cref="AggregateException">任一文件解析失败或世界名撞车;抛出前所有已加载规则均已丢弃</exception>
     public void Load(string mapName)
     {
+        Purge();
+
         if (!Directory.Exists(_stripperPath))
         {
             return;
         }
 
-        try
-        {
-            Global        = LoadFile(Path.Combine(_stripperPath, "global.jsonc"));
-            GlobalDefault = LoadFile(Path.Combine(_stripperPath, "global_default.jsonc"));
-        }
-        catch
-        {
-            Purge();
+        var errors = new List<Exception>();
 
-            throw;
-        }
+        Global        = LoadFile(Path.Combine(_stripperPath, "global.jsonc"),         errors, false);
+        GlobalDefault = LoadFile(Path.Combine(_stripperPath, "global_default.jsonc"), errors, false);
 
         var mapPath = Path.Combine(_stripperPath, "maps", mapName);
 
-        if (!Directory.Exists(mapPath))
+        if (Directory.Exists(mapPath))
         {
-            return;
-        }
-
-        foreach (var filePath in Directory.GetFiles(mapPath, "*.jsonc", SearchOption.AllDirectories))
-        {
-            try
+            foreach (var filePath in Directory.GetFiles(mapPath, "*.jsonc", SearchOption.AllDirectories))
             {
+                var rules = LoadFile(filePath, errors, true);
+
+                if (rules is null)
+                {
+                    continue;
+                }
+
                 var cleanPath = Path.GetRelativePath(mapPath, filePath);
                 var parentDir = Path.GetDirectoryName(cleanPath);
                 var worldName = string.IsNullOrWhiteSpace(parentDir) ? mapName : parentDir;
                 var lumpName  = Path.GetFileNameWithoutExtension(cleanPath);
-                var lumpData  = LoadFile(filePath) ?? throw new InvalidDataException("Failed to parse config");
-                var keyPair   = $"{worldName}::{lumpName}";
+                var key       = $"{worldName}::{lumpName}";
 
-                Lumps.Add(keyPair, lumpData);
-            }
-            catch (Exception e)
-            {
-                Lumps.Clear();
-
-                // re-throw
-                throw new FileLoadException("Failed to parse stripper file", filePath, e);
+                if (!Lumps.TryAdd(key, rules))
+                {
+                    errors.Add(new FileLoadException("Duplicated stripper world::lump key",
+                                                     filePath,
+                                                     new InvalidDataException($"'{key}' is already defined")));
+                }
             }
         }
+
+        if (errors.Count == 0)
+        {
+            return;
+        }
+
+        Purge();
+
+        throw new AggregateException("Failed to load stripper configuration", errors);
     }
 
-    private StripperFile? LoadFile(string file)
+    private StripperRules? LoadFile(string file, List<Exception> errors, bool required)
     {
         if (!File.Exists(file))
         {
             return null;
         }
 
-        var json = File.ReadAllText(file, _encoding);
+        try
+        {
+            var json = File.ReadAllText(file, _encoding);
 
-        return JsonSerializer.Deserialize<StripperFile>(json, Stripper.SerializerOptions);
+            var dto = JsonSerializer.Deserialize<StripperFile>(json, Stripper.SerializerOptions);
+
+            if (dto is null)
+            {
+                return required ? throw new InvalidDataException("Failed to parse config") : null;
+            }
+
+            return StripperRules.Build(dto);
+        }
+        catch (Exception e)
+        {
+            errors.Add(new FileLoadException("Failed to parse stripper file", file, e));
+
+            return null;
+        }
     }
 }
